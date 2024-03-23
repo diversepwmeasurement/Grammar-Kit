@@ -1,122 +1,92 @@
-# GitHub Actions Workflow created for handling the release process based on the draft release prepared
-# with the Build workflow. Running the publishPlugin task requires the PUBLISH_TOKEN secret provided.
-
-name: Release
-on:
-  release:
-    types: [ prereleased, released ]
-  workflow_dispatch:
-    inputs:
-      tagName:
-        description: 'The tag name (e.g. v2023.1)'
-        required: true
-        type: string
-      publishLibrary:
-        description: 'Publish library'
-        default: true
-        type: boolean
-      publishPlugin:
-        description: 'Publish plugin'
-        default: true
-        type: boolean
-
 jobs:
-
-  # Prepare and publish the plugin to the Marketplace repository
   release:
     name: Publish Plugin
-    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
+    runs-on: self-hosted
     steps:
+    - continue-on-error: true
+      name: Fetch Sources
+      uses: actions/checkout@v3
+      with:
+        ref: ${{ inputs.tagName || github.event.release.tag_name }}
+    - continue-on-error: true
+      name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: zulu
+        java-version: 17
+    - continue-on-error: true
+      id: properties
+      name: Export Properties
+      run: 'CHANGELOG="$(cat << ''EOM'' | sed -e ''s/^[[:space:]]*$//g'' -e ''/./,$!d''
 
-      # Check out current repository
-      - name: Fetch Sources
-        uses: actions/checkout@v3
-        with:
-          ref: ${{ inputs.tagName || github.event.release.tag_name }}
+        ${{ github.event.release.body }}
 
-      # Setup Java 17 environment for the next steps
-      - name: Setup Java
-        uses: actions/setup-java@v3
-        with:
-          distribution: zulu
-          java-version: 17
+        EOM
 
-      # Set environment variables
-      - name: Export Properties
-        id: properties
-        shell: bash
-        run: |
-          CHANGELOG="$(cat << 'EOM' | sed -e 's/^[[:space:]]*$//g' -e '/./,$!d'
-          ${{ github.event.release.body }}
-          EOM
-          )"
-          
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+        )"
 
-      # Update Unreleased section with the current release note
-      - name: Patch Changelog
-        if: ${{ steps.properties.outputs.changelog != '' }}
-        env:
-          CHANGELOG: ${{ steps.properties.outputs.changelog }}
-        run: |
-          ./gradlew patchChangelog --release-note="$CHANGELOG"
 
-      # Publish JAR to Maven Central
-      - name: Publish library
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publishLibrary }}
-        env:
-          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
-          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
-        run: ./gradlew publish
+        echo "changelog<<EOF" >> $GITHUB_OUTPUT
 
-      # Publish the plugin to the Marketplace
-      - name: Publish Plugin
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.publishPlugin }}
-        env:
-          PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
-          CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
-          PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
-          PRIVATE_KEY_PASSWORD: ${{ secrets.PRIVATE_KEY_PASSWORD }}
-        run: ./gradlew publishPlugin
+        echo "$CHANGELOG" >> $GITHUB_OUTPUT
 
-      # Upload artifact as a release asset
-      - name: Upload Release Asset
-        if: ${{ inputs.tagName || github.event.release.tag_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload ${{ github.event.release.tag_name }} ./build/distributions/*
+        echo "EOF" >> $GITHUB_OUTPUT
 
-      # Create pull request
-      - name: Create Pull Request
-        if: ${{ steps.properties.outputs.changelog != '' }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          BRANCH="changelog-update-$VERSION"
-          LABEL="release changelog"
-          
-          git config user.email "action@github.com"
-          git config user.name "GitHub Action"
-          
-          git checkout -b $BRANCH
-          git commit -am "Changelog update - $VERSION"
-          git push --set-upstream origin $BRANCH
-          
-          gh label create "$LABEL" \
-            --description "Pull requests with release changelog update" \
-            || true
-          
-          gh pr create \
-            --title "Changelog update - \`$VERSION\`" \
-            --body "Current pull request contains patched \`CHANGELOG.md\` file for the \`$VERSION\` version." \
-            --label "$LABEL" \
-            --head $BRANCH
+        '
+      shell: bash
+    - continue-on-error: true
+      env:
+        CHANGELOG: ${{ steps.properties.outputs.changelog }}
+      if: ${{ steps.properties.outputs.changelog != '' }}
+      name: Patch Changelog
+      run: './gradlew patchChangelog --release-note="$CHANGELOG"
+
+        '
+    - continue-on-error: true
+      env:
+        ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.MAVEN_CENTRAL_PASSWORD
+          }}
+        ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.MAVEN_CENTRAL_USERNAME
+          }}
+        ORG_GRADLE_PROJECT_signingKey: ${{ secrets.SIGNING_KEY }}
+        ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.SIGNING_PASSWORD }}
+        PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+      if: ${{ github.event_name != 'workflow_dispatch' || inputs.publishLibrary }}
+      name: Publish library
+      run: ./gradlew publish
+    - continue-on-error: true
+      env:
+        CERTIFICATE_CHAIN: ${{ secrets.CERTIFICATE_CHAIN }}
+        PRIVATE_KEY: ${{ secrets.PRIVATE_KEY }}
+        PRIVATE_KEY_PASSWORD: ${{ secrets.PRIVATE_KEY_PASSWORD }}
+        PUBLISH_TOKEN: ${{ secrets.PUBLISH_TOKEN }}
+      if: ${{ github.event_name != 'workflow_dispatch' || inputs.publishPlugin }}
+      name: Publish Plugin
+      run: ./gradlew publishPlugin
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if: ${{ inputs.tagName || github.event.release.tag_name }}
+      name: Upload Release Asset
+      run: gh release upload ${{ github.event.release.tag_name }} ./build/distributions/*
+    - continue-on-error: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      if: ${{ steps.properties.outputs.changelog != '' }}
+      name: Create Pull Request
+      run: "VERSION=\"${{ github.event.release.tag_name }}\"\nBRANCH=\"changelog-update-$VERSION\"\
+        \nLABEL=\"release changelog\"\n\ngit config user.email \"action@github.com\"\
+        \ngit config user.name \"GitHub Action\"\n\ngit checkout -b $BRANCH\ngit commit\
+        \ -am \"Changelog update - $VERSION\"\ngit push --set-upstream origin $BRANCH\n\
+        \ngh label create \"$LABEL\" \\\n  --description \"Pull requests with release\
+        \ changelog update\" \\\n  || true\n\ngh pr create \\\n  --title \"Changelog\
+        \ update - \\`$VERSION\\`\" \\\n  --body \"Current pull request contains patched\
+        \ \\`CHANGELOG.md\\` file for the \\`$VERSION\\` version.\" \\\n  --label\
+        \ \"$LABEL\" \\\n  --head $BRANCH\n"
+name: Release
+on:
+  repository_dispatch:
+    types: trigger-ga___release.yml
